@@ -1,33 +1,93 @@
 name: Send Morning Briefing Email
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'briefings/**.md'
+  schedule:
+    - cron: '0 23 * * *'  # 매일 오전 8시 KST
+  workflow_dispatch:
 
 jobs:
   send-email:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
 
-      - name: Get briefing content
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install yfinance
+
+      - name: Generate briefing
         id: briefing
         run: |
-          FILE=$(git diff --name-only HEAD~1 HEAD | grep 'briefings/' | head -1)
-          if [ -z "$FILE" ]; then
-            FILE=$(ls briefings/*.md 2>/dev/null | sort | tail -1)
-          fi
-          DATE=$(basename "$FILE" .md)
-          echo "date=$DATE" >> $GITHUB_OUTPUT
-          {
-            echo "content<<BRIEFING_EOF"
-            cat "$FILE"
-            echo "BRIEFING_EOF"
-          } >> $GITHUB_OUTPUT
+          python3 << 'EOF'
+          import yfinance as yf
+          import datetime
+          import os
+
+          kst = datetime.timezone(datetime.timedelta(hours=9))
+          today = datetime.datetime.now(kst).strftime('%Y-%m-%d')
+
+          tickers = {
+              "IREN":  ("IREN",   300),
+              "SATL":  ("SATL",   4000),
+              "RKLB":  ("RKLB",   295),
+              "SIVE":  ("SIVEF",  558),
+              "MU":    ("MU",     12),
+              "AAOI":  ("AAOI",   41),
+              "ABCL":  ("ABCL",   11),
+              "NFLX":  ("NFLX",   1),
+              "AXT":   ("AXTI",   163),
+              "INTC":  ("INTC",   32),
+              "BTC":   ("BTC-USD", None),
+              "ETH":   ("ETH-USD", None),
+          }
+
+          lines = [f"[{today}] 모닝 브리핑\n"]
+          lines.append("=" * 40)
+          lines.append("■ 보유 종목 현황\n")
+
+          total_value = 0
+
+          for name, (symbol, shares) in tickers.items():
+              try:
+                  t = yf.Ticker(symbol)
+                  hist = t.history(period="2d")
+                  if len(hist) < 1:
+                      lines.append(f"{name:6} | 데이터 없음")
+                      continue
+                  price = hist['Close'].iloc[-1]
+                  prev  = hist['Close'].iloc[-2] if len(hist) >= 2 else price
+                  pct   = (price - prev) / prev * 100
+                  arrow = "▲" if pct >= 0 else "▼"
+                  sign  = "+" if pct >= 0 else ""
+
+                  if shares:
+                      value = price * shares
+                      total_value += value
+                      lines.append(f"{name:6} | ${price:>8.2f}  {arrow}{sign}{pct:.2f}%  ({shares}주 = ${value:,.0f})")
+                  else:
+                      lines.append(f"{name:6} | ${price:>8.2f}  {arrow}{sign}{pct:.2f}%")
+              except Exception as e:
+                  lines.append(f"{name:6} | 오류: {e}")
+
+          lines.append("")
+          lines.append("=" * 40)
+          lines.append(f"주식 합산 평가액: ${total_value:,.0f}")
+          lines.append("")
+          lines.append("* 가격은 전일 종가 기준입니다.")
+
+          content = "\n".join(lines)
+          print(content)
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"date={today}\n")
+              f.write("content<<BRIEFING_EOF\n")
+              f.write(content)
+              f.write("\nBRIEFING_EOF\n")
+          EOF
 
       - name: Send email
         uses: dawidd6/action-send-mail@v3
