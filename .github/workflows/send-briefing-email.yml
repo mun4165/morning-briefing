@@ -101,4 +101,4 @@ jobs:
           body: ${{ steps.briefing.outputs.content }}
           to: mun4165@naver.com
           from: "Claude 브리핑 에이전트 <${{ secrets.GMAIL_USERNAME }}>"
-          content_type: "text/plain; charset=UTF-8"
+
